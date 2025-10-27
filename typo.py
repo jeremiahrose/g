@@ -352,7 +352,7 @@ class RealtimeApp:
     async def handle_realtime_connection(self) -> None:
         try:
             debug("attempting to connect to OpenAI Realtime API...")
-            async with self.client.beta.realtime.connect(model="gpt-4o-realtime-preview") as conn:
+            async with self.client.beta.realtime.connect(model="gpt-realtime-2025-08-28") as conn:
                 debug("successfully connected to OpenAI Realtime API")
                 self.connection = conn
                 self.connected.set()
@@ -394,6 +394,7 @@ class RealtimeApp:
 
                     if event.type == "session.updated":
                         debug("session updated successfully")
+                        debug(str(event.session))
                         self.session = event.session
                         continue
 
