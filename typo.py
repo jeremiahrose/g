@@ -118,6 +118,23 @@ class MCPClient:
                 }
                 self.available_tools.append(openai_tool)
 
+            # Add built-in output_text tool
+            self.available_tools.append({
+                "type": "function",
+                "name": "output_text",
+                "description": "Output longer text content to the user's terminal. Use this for any content that can't be spoken in 8 words or less, such as lists, code, detailed information, or multi-line responses.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "The text content to display to the user"
+                        }
+                    },
+                    "required": ["text"]
+                }
+            })
+
     async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Execute a tool call on the MCP server."""
         if not self.client:
@@ -353,6 +370,7 @@ class RealtimeApp:
 
                 try:
                     await conn.session.update(session={
+                        "modalities": ["audio", "text"],
                         "turn_detection": {"type": "server_vad"},
                         "tools": tools,
                         "tool_choice": "auto",
@@ -398,16 +416,6 @@ class RealtimeApp:
 
                         bytes_data = base64.b64decode(event.delta)
                         self.audio_player.add_data(bytes_data)
-                        continue
-
-                    if event.type == "response.audio_transcript.delta":
-                        # Print the AI prefix only once when starting a new response
-                        if not self.response_started:
-                            print("🐛 ", end="", flush=True)
-                            self.response_started = True
-
-                        # Simply print the delta text (new characters only)
-                        print(event.delta, end="", flush=True)
                         continue
 
                     if event.type == "response.done":
@@ -550,6 +558,25 @@ class RealtimeApp:
             args = json.loads(function_call_item.arguments)
         except json.JSONDecodeError:
             args = {}
+
+        # Handle built-in output_text tool without approval
+        if tool_name == "output_text":
+            text = args.get("text", "")
+            # Print directly to stdout without emoji prefix
+            print(text)
+            print()  # Add blank line for spacing
+
+            # Send success result back to the model
+            connection = await self._get_connection()
+            await connection.conversation.item.create(
+                item={
+                    "type": "function_call_output",
+                    "call_id": function_call_item.call_id,
+                    "output": json.dumps({"success": True, "displayed": True})
+                }
+            )
+            await connection.response.create()
+            return
 
         # Get user approval for tool execution
         approved = await self.get_user_approval(tool_name, args)
