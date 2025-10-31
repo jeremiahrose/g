@@ -261,6 +261,8 @@ class GlobalKeyboardListener:
 
 class RealtimeApp:
 
+    NOTIFICATION_GROUP_ID = "typo-tool-approval"
+
     def __init__(self) -> None:
         self.connection = None
         self.session = None
@@ -283,6 +285,30 @@ class RealtimeApp:
         self.pending_tool_approval = None  # (tool_name, args, future)
         self.keyboard_listener = GlobalKeyboardListener(self)
 
+    def show_notification(self, title: str, message: str) -> None:
+        """Show a macOS notification using terminal-notifier."""
+        try:
+            import subprocess
+            subprocess.run([
+                "terminal-notifier",
+                "-title", title,
+                "-message", message,
+                "-sound", "default",
+                "-group", self.NOTIFICATION_GROUP_ID
+            ], check=False, capture_output=True)
+        except Exception as e:
+            debug(f"failed to send notification: {e}")
+
+    def dismiss_notification(self) -> None:
+        """Dismiss the current macOS notification."""
+        try:
+            import subprocess
+            subprocess.run([
+                "terminal-notifier",
+                "-remove", self.NOTIFICATION_GROUP_ID
+            ], check=False, capture_output=True)
+        except Exception as e:
+            debug(f"failed to dismiss notification: {e}")
 
     async def start(self) -> None:
         """Start the application."""
@@ -394,7 +420,6 @@ class RealtimeApp:
 
                     if event.type == "session.updated":
                         debug("session updated successfully")
-                        debug(str(event.session))
                         self.session = event.session
                         continue
 
@@ -524,6 +549,7 @@ class RealtimeApp:
             if not future.done():
                 future.set_result(True)
                 info("tool call approved (Right Cmd)")
+                self.dismiss_notification()
 
     def reject_pending_tool(self):
         """Reject the pending tool call (called by keyboard listener)."""
@@ -532,6 +558,7 @@ class RealtimeApp:
             if not future.done():
                 future.set_result(False)
                 info("tool call rejected (Right Option)")
+                self.dismiss_notification()
 
     async def get_user_approval(self, tool_name: str, args: dict) -> bool:
         """Get user approval for tool execution via main input loop."""
@@ -546,6 +573,17 @@ class RealtimeApp:
                 tool_msg += f"\n   {key}: {value}"
         info(tool_msg)
         info("approve this tool call? Press Right Cmd to approve, Right Option to reject (or 'y'/'n' + Enter)")
+
+        # Send macOS notification
+        notification_message = f"Tool: {tool_name}"
+        if args:
+            # Add first arg to notification for context
+            first_key = list(args.keys())[0] if args else None
+            if first_key:
+                arg_preview = str(args[first_key])[:50]  # Truncate to 50 chars
+                notification_message += f"\n{first_key}: {arg_preview}"
+
+        self.show_notification("Tool Approval Required", notification_message)
 
         # Wait for keyboard listener or CLI input to resolve this
         return await future
@@ -696,9 +734,11 @@ class RealtimeApp:
                         if user_input.lower() in ['y', 'yes']:
                             future.set_result(True)
                             debug("tool call approved")
+                            self.dismiss_notification()
                         elif user_input.lower() in ['n', 'no']:
                             future.set_result(False)
                             debug("tool call denied")
+                            self.dismiss_notification()
                         else:
                             print("please enter 'y' for yes or 'n' for no:")
                             continue
