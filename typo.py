@@ -75,6 +75,7 @@ class MCPClient:
     def __init__(self):
         self.available_tools: list[dict] = []
         self.client = None
+        self._client_instance = None
 
     async def connect_to_mcp_servers(self):
         """Connect to MCP servers defined in configuration."""
@@ -94,7 +95,7 @@ class MCPClient:
         # Create and validate client with FastMCP
         try:
             current_dir = os.getcwd()
-            self.client = Client(
+            self._client_instance = Client(
                 config,
                 roots=[f"file://{current_dir}/"]
             )
@@ -103,37 +104,39 @@ class MCPClient:
             error(f"mcp.json validation failed: {e}")
             raise
 
-        # Connect and get available tools
-        async with self.client as client:
-            tools = await client.list_tools()
-            self.available_tools = []
+        # Enter the context manager once and keep it open
+        self.client = await self._client_instance.__aenter__()
 
-            for tool in tools:
-                # Convert MCP tool to OpenAI function format
-                openai_tool = {
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description or f"MCP tool: {tool.name}",
-                    "parameters": tool.inputSchema or {"type": "object", "properties": {}, "required": []}
-                }
-                self.available_tools.append(openai_tool)
+        # Get available tools
+        tools = await self.client.list_tools()
+        self.available_tools = []
 
-            # Add built-in output_text tool
-            self.available_tools.append({
+        for tool in tools:
+            # Convert MCP tool to OpenAI function format
+            openai_tool = {
                 "type": "function",
-                "name": "output_text",
-                "description": "Output longer text content to the user's terminal. Use this for any content that can't be spoken in 8 words or less, such as lists, code, detailed information, or multi-line responses.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {
-                            "type": "string",
-                            "description": "The text content to display to the user"
-                        }
-                    },
-                    "required": ["text"]
-                }
-            })
+                "name": tool.name,
+                "description": tool.description or f"MCP tool: {tool.name}",
+                "parameters": tool.inputSchema or {"type": "object", "properties": {}, "required": []}
+            }
+            self.available_tools.append(openai_tool)
+
+        # Add built-in output_text tool
+        self.available_tools.append({
+            "type": "function",
+            "name": "output_text",
+            "description": "Output longer text content to the user's terminal. Use this for any content that can't be spoken in 8 words or less, such as lists, code, detailed information, or multi-line responses.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text content to display to the user"
+                    }
+                },
+                "required": ["text"]
+            }
+        })
 
     async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Execute a tool call on the MCP server."""
@@ -141,13 +144,12 @@ class MCPClient:
             return {"error": "No MCP server configured"}
 
         try:
-            async with self.client as client:
-                result = await client.call_tool(tool_name, arguments)
-                return {
-                    "success": True,
-                    "content": result.content if hasattr(result, 'content') else [{"type": "text", "text": str(result)}],
-                    "isError": False
-                }
+            result = await self.client.call_tool(tool_name, arguments)
+            return {
+                "success": True,
+                "content": result.content if hasattr(result, 'content') else [{"type": "text", "text": str(result)}],
+                "isError": False
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -213,8 +215,12 @@ class MCPClient:
 
     async def close(self):
         """Close the MCP client connection."""
-        # FastMCP Client uses async context managers, no explicit close needed
-        pass
+        if self._client_instance:
+            try:
+                await self._client_instance.__aexit__(None, None, None)
+                debug("MCP client connection closed")
+            except Exception as e:
+                error(f"Error closing MCP client: {e}")
 
 
 class GlobalKeyboardListener:
