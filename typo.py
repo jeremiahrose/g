@@ -21,6 +21,8 @@ import sys
 from typing import Any, cast
 from fastmcp import Client
 import os
+from pathlib import Path
+import fnmatch
 from audio_util import CHANNELS, SAMPLE_RATE, AudioPlayerAsync
 from openai import AsyncOpenAI
 from openai.types.beta.realtime.session import Session
@@ -67,6 +69,141 @@ def load_system_prompt() -> str:
     except Exception as e:
         error(f"failed to load system_prompt.md: {e}")
         raise
+
+
+class ToolPermissions:
+    """Manages tool permissions similar to Claude Code's permission system."""
+
+    SETTINGS_DIR = Path(".typo")
+    SETTINGS_FILE = SETTINGS_DIR / "settings.json"
+
+    def __init__(self):
+        self.allowed_tools: list[str] = []
+        self.denied_tools: list[str] = []
+        self._ensure_settings_dir()
+        self.load()
+
+    def _ensure_settings_dir(self):
+        """Ensure the settings directory exists."""
+        self.SETTINGS_DIR.mkdir(exist_ok=True)
+
+    def load(self):
+        """Load permissions from settings file."""
+        if not self.SETTINGS_FILE.exists():
+            # Create default settings
+            self._save_default()
+            return
+
+        try:
+            with open(self.SETTINGS_FILE, "r") as f:
+                settings = json.load(f)
+
+            permissions = settings.get("permissions", {})
+            self.allowed_tools = permissions.get("allowedTools", [])
+            self.denied_tools = permissions.get("deny", [])
+
+            debug(f"loaded permissions: {len(self.allowed_tools)} allowed, {len(self.denied_tools)} denied")
+        except Exception as e:
+            error(f"failed to load permissions: {e}")
+            self._save_default()
+
+    def _save_default(self):
+        """Save default permissions."""
+        settings = {
+            "permissions": {
+                "allowedTools": [],
+                "deny": []
+            }
+        }
+        with open(self.SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+
+    def save(self):
+        """Save current permissions to settings file."""
+        settings = {
+            "permissions": {
+                "allowedTools": self.allowed_tools,
+                "deny": self.denied_tools
+            }
+        }
+        try:
+            with open(self.SETTINGS_FILE, "w") as f:
+                json.dump(settings, f, indent=2)
+            debug("permissions saved")
+        except Exception as e:
+            error(f"failed to save permissions: {e}")
+
+    def _matches_pattern(self, tool_call: str, pattern: str) -> bool:
+        """Check if a tool call matches a permission pattern.
+
+        Patterns can be:
+        - Simple tool name: "tool_name"
+        - Tool with argument pattern: "tool_name(arg_pattern)"
+        - Wildcards: "tool_name(*)" or "tool_name(prefix*)"
+        """
+        # If pattern has no parentheses, match just the tool name
+        if "(" not in pattern:
+            tool_name = tool_call.split("(")[0] if "(" in tool_call else tool_call
+            return fnmatch.fnmatch(tool_name, pattern)
+
+        # Pattern has arguments - use full fnmatch
+        return fnmatch.fnmatch(tool_call, pattern)
+
+    def is_denied(self, tool_name: str, args: dict = None) -> bool:
+        """Check if a tool call is explicitly denied."""
+        tool_call = self._format_tool_call(tool_name, args)
+
+        for pattern in self.denied_tools:
+            if self._matches_pattern(tool_call, pattern):
+                debug(f"tool '{tool_call}' denied by pattern '{pattern}'")
+                return True
+
+        return False
+
+    def is_allowed(self, tool_name: str, args: dict = None) -> bool:
+        """Check if a tool call is pre-approved."""
+        tool_call = self._format_tool_call(tool_name, args)
+
+        for pattern in self.allowed_tools:
+            if self._matches_pattern(tool_call, pattern):
+                debug(f"tool '{tool_call}' allowed by pattern '{pattern}'")
+                return True
+
+        return False
+
+    def _format_tool_call(self, tool_name: str, args: dict = None) -> str:
+        """Format tool call for pattern matching."""
+        if not args:
+            return tool_name
+
+        # Create a simple representation of the tool call with main args
+        # For simple matching, we'll just use tool_name for now
+        # More sophisticated matching could include arg values
+        return tool_name
+
+    def add_allowed(self, tool_name: str, args: dict = None, pattern: str = None):
+        """Add a tool to the allowed list."""
+        if pattern:
+            tool_pattern = pattern
+        else:
+            tool_pattern = tool_name
+
+        if tool_pattern not in self.allowed_tools:
+            self.allowed_tools.append(tool_pattern)
+            self.save()
+            info(f"added '{tool_pattern}' to allowed tools")
+
+    def add_denied(self, tool_name: str, args: dict = None, pattern: str = None):
+        """Add a tool to the denied list."""
+        if pattern:
+            tool_pattern = pattern
+        else:
+            tool_pattern = tool_name
+
+        if tool_pattern not in self.denied_tools:
+            self.denied_tools.append(tool_pattern)
+            self.save()
+            info(f"added '{tool_pattern}' to denied tools")
 
 
 class MCPClient:
@@ -286,6 +423,7 @@ class RealtimeApp:
         self.should_send_audio = asyncio.Event()
         self.connected = asyncio.Event()
         self.mcp_client = MCPClient()
+        self.permissions = ToolPermissions()
         self.is_recording = False
         self.response_started = False
         self.pending_tool_approval = None  # (tool_name, args, future)
@@ -567,7 +705,10 @@ class RealtimeApp:
                 self.dismiss_notification()
 
     async def get_user_approval(self, tool_name: str, args: dict) -> bool:
-        """Get user approval for tool execution via main input loop."""
+        """Get user approval for tool execution via main input loop.
+
+        Returns True to approve, False to deny. Also handles "always allow" and "never allow".
+        """
         # Set up pending approval and wait for result
         future = asyncio.Future()
         self.pending_tool_approval = (tool_name, args, future)
@@ -578,7 +719,11 @@ class RealtimeApp:
             for key, value in args.items():
                 tool_msg += f"\n   {key}: {value}"
         info(tool_msg)
-        info("approve this tool call? Press Right Cmd to approve, Right Option to reject (or 'y'/'n' + Enter)")
+        info("approve this tool call?")
+        info("  Right Cmd (or 'y') = approve once")
+        info("  Right Option (or 'n') = reject once")
+        info("  'a' + Enter = always allow this tool")
+        info("  'x' + Enter = never allow this tool")
 
         # Send macOS notification
         notification_message = f"Tool: {tool_name}"
@@ -623,8 +768,28 @@ class RealtimeApp:
             await connection.response.create()
             return
 
-        # Get user approval for tool execution
-        approved = await self.get_user_approval(tool_name, args)
+        # Check permissions first
+        if self.permissions.is_denied(tool_name, args):
+            info(f"tool '{tool_name}' is blocked by permissions")
+            # Send denial result back to the model
+            connection = await self._get_connection()
+            await connection.conversation.item.create(
+                item={
+                    "type": "function_call_output",
+                    "call_id": function_call_item.call_id,
+                    "output": json.dumps({"error": "Tool call blocked by permissions"})
+                }
+            )
+            await connection.response.create()
+            return
+
+        # Check if auto-approved
+        if self.permissions.is_allowed(tool_name, args):
+            debug(f"tool '{tool_name}' auto-approved by permissions")
+            approved = True
+        else:
+            # Get user approval for tool execution
+            approved = await self.get_user_approval(tool_name, args)
 
         if not approved:
             # Send denial result back to the model
@@ -745,8 +910,20 @@ class RealtimeApp:
                             future.set_result(False)
                             debug("tool call denied")
                             self.dismiss_notification()
+                        elif user_input.lower() == 'a':
+                            # Always allow this tool
+                            self.permissions.add_allowed(tool_name, args)
+                            future.set_result(True)
+                            info(f"tool '{tool_name}' will always be allowed")
+                            self.dismiss_notification()
+                        elif user_input.lower() == 'x':
+                            # Never allow this tool
+                            self.permissions.add_denied(tool_name, args)
+                            future.set_result(False)
+                            info(f"tool '{tool_name}' will never be allowed")
+                            self.dismiss_notification()
                         else:
-                            print("please enter 'y' for yes or 'n' for no:")
+                            print("please enter 'y' (yes), 'n' (no), 'a' (always), or 'x' (never):")
                             continue
 
                         self.pending_tool_approval = None

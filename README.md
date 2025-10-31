@@ -42,9 +42,13 @@ A low latency voice-activated AI assistant using OpenAI's Realtime API as a loca
 
 5. **Tool Approvals**
    - typo will print tool requests to the terminal
-   - **Right Command (⌘)** to approve (works globally)
-   - **Right Option (⌥)** to reject (works globally)
-   - **CLI**: Type `y` or `n` + Enter
+   - **Right Command (⌘)** to approve once (works globally)
+   - **Right Option (⌥)** to reject once (works globally)
+   - **CLI Options**:
+     - `y` + Enter: Approve once
+     - `n` + Enter: Reject once
+     - `a` + Enter: Always allow this tool (saves to config)
+     - `x` + Enter: Never allow this tool (saves to config)
 
 ## Development
 
@@ -77,6 +81,35 @@ Configure MCP servers in `mcp.json`:
   }
 }
 ```
+
+### Tool Permissions
+
+typo uses a Claude Code-inspired permissions system to control which tools can run automatically. Configuration is stored in `.typo/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allowedTools": [
+      "get_current_time",
+      "search_web"
+    ],
+    "deny": [
+      "delete_file",
+      "run_command"
+    ]
+  }
+}
+```
+
+**How it works**:
+- Tools in `allowedTools` run automatically without prompting
+- Tools in `deny` are blocked completely
+- All other tools require approval
+- Use `a` or `x` during approval prompts to add tools to these lists
+
+**Pattern matching** (future enhancement):
+- Simple tool name: `"tool_name"`
+- Tool with wildcards: `"tool_name(*)"` or `"prefix*"`
 
 ### Logging
 
