@@ -367,6 +367,8 @@ class GlobalKeyboardListener:
         self.app = app
         self.listener = None
         self.running = False
+        self.shift_pressed = False
+        self.cmd_pressed = False
 
     def start(self):
         """Start the global keyboard listener in a separate thread."""
@@ -374,9 +376,9 @@ class GlobalKeyboardListener:
             return
 
         self.running = True
-        self.listener = keyboard.Listener(on_press=self.on_key_press)
+        self.listener = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
         self.listener.start()
-        debug("global keyboard listener started (Right Cmd=approve, Right Option=reject)")
+        debug("global keyboard listener started (Right Cmd=approve once, Right Option=reject once, Shift+Cmd=always allow)")
 
     def stop(self):
         """Stop the global keyboard listener."""
@@ -388,18 +390,38 @@ class GlobalKeyboardListener:
     def on_key_press(self, key):
         """Handle key press events."""
         try:
+            # Track modifier keys
+            if key == keyboard.Key.shift_r:
+                self.shift_pressed = True
+            elif key == keyboard.Key.cmd_r:
+                self.cmd_pressed = True
+
             if not self.app.pending_tool_approval:
                 return
 
             if key == keyboard.Key.cmd_r:
-                # Right Command = Approve
-                self.app.approve_pending_tool()
+                # Right Command = Approve once (or Always allow if Shift is held)
+                if self.shift_pressed:
+                    self.app.always_allow_pending_tool()
+                else:
+                    self.app.approve_pending_tool()
             elif key == keyboard.Key.alt_r:
-                # Right Option/Alt = Reject
+                # Right Option/Alt = Reject once
                 self.app.reject_pending_tool()
 
         except Exception as e:
             debug(f"keyboard listener error: {e}")
+
+    def on_key_release(self, key):
+        """Handle key release events."""
+        try:
+            # Track modifier keys
+            if key == keyboard.Key.shift_r:
+                self.shift_pressed = False
+            elif key == keyboard.Key.cmd_r:
+                self.cmd_pressed = False
+        except Exception as e:
+            debug(f"keyboard listener release error: {e}")
 
 
 class RealtimeApp:
@@ -694,6 +716,7 @@ class RealtimeApp:
                 future.set_result(True)
                 info("tool call approved (Right Cmd)")
                 self.dismiss_notification()
+                self.pending_tool_approval = None
 
     def reject_pending_tool(self):
         """Reject the pending tool call (called by keyboard listener)."""
@@ -703,6 +726,18 @@ class RealtimeApp:
                 future.set_result(False)
                 info("tool call rejected (Right Option)")
                 self.dismiss_notification()
+                self.pending_tool_approval = None
+
+    def always_allow_pending_tool(self):
+        """Always allow the pending tool (called by keyboard listener)."""
+        if self.pending_tool_approval:
+            tool_name, args, future = self.pending_tool_approval
+            if not future.done():
+                self.permissions.add_allowed(tool_name, args)
+                future.set_result(True)
+                info(f"tool '{tool_name}' will always be allowed (Shift+Cmd)")
+                self.dismiss_notification()
+                self.pending_tool_approval = None
 
     async def get_user_approval(self, tool_name: str, args: dict) -> bool:
         """Get user approval for tool execution via main input loop.
@@ -720,10 +755,10 @@ class RealtimeApp:
                 tool_msg += f"\n   {key}: {value}"
         info(tool_msg)
         info("approve this tool call?")
-        info("  Right Cmd (or 'y') = approve once")
-        info("  Right Option (or 'n') = reject once")
-        info("  'a' + Enter = always allow this tool")
-        info("  'x' + Enter = never allow this tool")
+        info("  Right Cmd (or 'y' + Enter) = approve once")
+        info("  Right Option (or 'n' + Enter) = reject once")
+        info("  Shift + Right Cmd (or 'a' + Enter) = always allow")
+        info("  'x' + Enter = never allow")
 
         # Send macOS notification
         notification_message = f"Tool: {tool_name}"

@@ -42,8 +42,10 @@ A low latency voice-activated AI assistant using OpenAI's Realtime API as a loca
 
 5. **Tool Approvals**
    - typo will print tool requests to the terminal
-   - **Right Command (⌘)** to approve once (works globally)
-   - **Right Option (⌥)** to reject once (works globally)
+   - **Keyboard Shortcuts** (work globally from any window):
+     - **Right Command (⌘)**: Approve once
+     - **Right Option (⌥)**: Reject once
+     - **Shift + Right Command (⇧⌘)**: Always allow (saves to config)
    - **CLI Options**:
      - `y` + Enter: Approve once
      - `n` + Enter: Reject once
