@@ -42,7 +42,11 @@ dirs = "5.0"
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
 
-# Platform-specific
-[target.'cfg(target_os = "macos")'.workspace.dependencies]
+# Utilities
+base64 = "0.22"
+wildmatch = "2.3"
+http = "1.1"
+
+# macOS-specific (defined here, used conditionally in cli)
 notify-rust = "4.11"
 rdev = "0.5"

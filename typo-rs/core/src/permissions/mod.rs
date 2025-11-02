@@ -110,11 +110,11 @@ impl PermissionManager {
             } else {
                 tool_call
             };
-            return fnmatch::fnmatch(pattern, tool_name);
+            return wildmatch::WildMatch::new(pattern).matches(tool_name);
         }
 
-        // Pattern has arguments - use full fnmatch
-        fnmatch::fnmatch(pattern, tool_call)
+        // Pattern has arguments - use full wildmatch
+        wildmatch::WildMatch::new(pattern).matches(tool_call)
     }
 
     /// Format tool call for pattern matching
@@ -128,9 +128,13 @@ impl PermissionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     #[tokio::test]
     async fn test_pattern_matching() {
+        // Set a temp directory for tests
+        env::set_current_dir(env::temp_dir()).ok();
+
         let manager = PermissionManager::new().await.unwrap();
 
         // Simple tool name matching

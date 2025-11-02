@@ -10,7 +10,7 @@ const CHANNELS: u16 = 1;
 
 pub struct AudioRecorder {
     audio_tx: Arc<Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
-    _stream: cpal::Stream,
+    _stream: Option<cpal::Stream>,
 }
 
 impl AudioRecorder {
@@ -26,7 +26,8 @@ impl AudioRecorder {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let audio_tx = Arc::new(Mutex::new(None));
+        let audio_tx: Arc<Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>> =
+            Arc::new(Mutex::new(None));
         let audio_tx_clone = Arc::clone(&audio_tx);
 
         let stream = device.build_input_stream(
@@ -54,7 +55,7 @@ impl AudioRecorder {
 
         Ok(Self {
             audio_tx,
-            _stream: stream,
+            _stream: Some(stream),
         })
     }
 

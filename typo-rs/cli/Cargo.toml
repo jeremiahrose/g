@@ -38,6 +38,9 @@ clap = { workspace = true }
 # Input
 crossterm = "0.28"
 
+# Utilities
+base64 = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 notify-rust = { workspace = true }
 rdev = { workspace = true }

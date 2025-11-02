@@ -4,4 +4,6 @@ mod realtime;
 mod types;
 
 pub use realtime::RealtimeClient;
-pub use types::{RealtimeEvent, SessionConfig, Tool as RealtimeTool};
+pub use types::{
+    ConversationItemInput, OutputItem, RealtimeEvent, SessionConfig, Tool, TurnDetectionConfig,
+};

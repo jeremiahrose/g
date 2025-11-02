@@ -1,7 +1,7 @@
 //! Typo CLI - Voice-controlled AI assistant
 
 mod app;
-mod audio;
+// mod audio; // TODO: Re-enable when audio is working
 #[cfg(target_os = "macos")]
 mod keyboard;
 

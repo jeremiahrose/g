@@ -32,5 +32,6 @@ toml = { workspace = true }
 dirs = { workspace = true }
 
 # Utilities
-base64 = "0.22"
-fnmatch = "0.2"
+base64 = { workspace = true }
+wildmatch = { workspace = true }
+http = { workspace = true }

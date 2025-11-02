@@ -10,7 +10,6 @@ use typo_core::{
     permissions::PermissionManager,
 };
 
-use crate::audio::{AudioPlayer, AudioRecorder};
 #[cfg(target_os = "macos")]
 use crate::keyboard::KeyboardListener;
 
@@ -28,9 +27,7 @@ pub struct App {
     openai_client: Arc<RwLock<Option<RealtimeClient>>>,
     mcp_client: Arc<McpClient>,
     permissions: Arc<PermissionManager>,
-    audio_player: Arc<AudioPlayer>,
-    audio_recorder: Arc<AudioRecorder>,
-    pending_approval: Arc<RwLock<Option<(String, Value, mpsc::Sender<ApprovalDecision>)>>>,
+    pub pending_approval: Arc<RwLock<Option<(String, Value, mpsc::Sender<ApprovalDecision>)>>>,
 }
 
 impl App {
@@ -45,10 +42,6 @@ impl App {
         // Initialize permissions
         let permissions = Arc::new(PermissionManager::new().await?);
 
-        // Initialize audio
-        let audio_player = Arc::new(AudioPlayer::new()?);
-        let audio_recorder = Arc::new(AudioRecorder::new()?);
-
         // Connect to OpenAI
         let openai_client = Arc::new(RwLock::new(Some(
             RealtimeClient::connect(api_key, model).await?,
@@ -58,8 +51,6 @@ impl App {
             openai_client,
             mcp_client,
             permissions,
-            audio_player,
-            audio_recorder,
             pending_approval: Arc::new(RwLock::new(None)),
         })
     }
@@ -135,9 +126,9 @@ impl App {
                 }
                 RealtimeEvent::ResponseAudioDelta { delta, .. } => {
                     // Decode and play audio
-                    if let Ok(audio_bytes) = base64::decode(&delta) {
-                        self.audio_player.play(&audio_bytes).await?;
-                    }
+                    // TODO: Implement audio playback
+                    use base64::Engine;
+                    let _ = base64::engine::general_purpose::STANDARD.decode(&delta);
                 }
                 RealtimeEvent::ResponseDone { response } => {
                     tracing::debug!("Response done: {}", response.status);
@@ -289,10 +280,13 @@ pub async fn run(api_key: String, model: String) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let app_clone = Arc::clone(&app);
-        tokio::spawn(async move {
-            if let Err(e) = KeyboardListener::start(app_clone).await {
-                tracing::error!("Keyboard listener error: {}", e);
-            }
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                if let Err(e) = KeyboardListener::start(app_clone).await {
+                    tracing::error!("Keyboard listener error: {}", e);
+                }
+            });
         });
     }
 

@@ -35,7 +35,7 @@ impl KeyboardListener {
                     }
                 });
             }) {
-                tracing::error!("Keyboard listener error: {}", e);
+                tracing::error!("Keyboard listener error: {:?}", e);
             }
         });
 
@@ -66,15 +66,15 @@ async fn handle_key_event(event: Event, app: Arc<App>, state: Arc<KeyboardState>
                             Some(ApprovalDecision::ApproveOnce)
                         }
                     }
-                    Key::AltRight => {
-                        // Right Option
+                    Key::Alt | Key::AltGr => {
+                        // Right Option/Alt
                         Some(ApprovalDecision::RejectOnce)
                     }
                     _ => None,
                 };
 
                 if let Some(decision) = decision {
-                    let _ = tx.send(decision).await;
+                    let _ = tx.send(decision).await.ok();
                 }
             }
         }

@@ -10,7 +10,7 @@ const CHANNELS: u16 = 1;
 
 pub struct AudioPlayer {
     queue: Arc<Mutex<Vec<i16>>>,
-    _stream: cpal::Stream,
+    _stream: Option<cpal::Stream>,
 }
 
 impl AudioPlayer {
@@ -54,7 +54,7 @@ impl AudioPlayer {
 
         Ok(Self {
             queue,
-            _stream: stream,
+            _stream: Some(stream),
         })
     }
 
