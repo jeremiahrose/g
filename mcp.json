@@ -1,16 +1,7 @@
 {
   "mcpServers": {
-    "macos-control": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--with",
-        "git+https://github.com/jeremiahrose/applescript-mcp.git",
-        "applescript-mcp"
-      ],
-      "env": {
-        "LOG_LEVEL": "INFO"
-      }
+    "greensync": {
+    "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
