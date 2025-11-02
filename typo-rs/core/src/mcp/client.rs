@@ -9,7 +9,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 /// MCP client for managing connections to MCP servers
@@ -22,6 +22,7 @@ pub struct McpClient {
 struct ServerConnection {
     _child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
+    #[allow(dead_code)]
     response_rx: mpsc::UnboundedReceiver<JsonRpcResponse>,
 }
 

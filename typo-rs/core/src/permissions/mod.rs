@@ -1,7 +1,7 @@
 //! Tool permissions management
 
-use crate::config::{get_settings_path, load_settings, save_settings, PermissionsConfig, Settings};
-use crate::error::{Error, Result};
+use crate::config::{get_settings_path, load_settings, save_settings, Settings};
+use crate::error::Result;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
