@@ -19,15 +19,21 @@ impl RealtimeClient {
     pub async fn connect(api_key: String, model: String) -> Result<Self> {
         let url = format!("{}?model={}", REALTIME_API_URL, model);
 
-        // Create request with authorization header
-        let request = http::Request::builder()
-            .uri(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("OpenAI-Beta", "realtime=v1")
-            .body(())
+        tracing::info!("Connecting to OpenAI Realtime API...");
+
+        // Create WebSocket request with proper headers
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = url.into_client_request()
             .map_err(|e| Error::OpenAI(format!("Failed to create request: {}", e)))?;
 
-        tracing::info!("Connecting to OpenAI Realtime API...");
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", api_key).parse().unwrap()
+        );
+        request.headers_mut().insert(
+            "OpenAI-Beta",
+            "realtime=v1".parse().unwrap()
+        );
 
         let (ws_stream, _) = connect_async(request)
             .await
