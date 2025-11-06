@@ -35,3 +35,6 @@ dirs = { workspace = true }
 base64 = { workspace = true }
 wildmatch = { workspace = true }
 http = { workspace = true }
+
+# MCP SDK (official)
+rmcp = { workspace = true }

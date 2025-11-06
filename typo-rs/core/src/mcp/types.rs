@@ -49,6 +49,7 @@ impl ContentItem {
 
 /// JSON-RPC request
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub id: u64,

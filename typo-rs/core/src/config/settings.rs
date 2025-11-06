@@ -4,11 +4,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// MCP server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpServerConfig {
+    /// URL for HTTP/WebSocket MCP servers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// Command for subprocess MCP servers
+    #[serde(default)]
     pub command: String,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
 }

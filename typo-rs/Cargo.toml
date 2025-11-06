@@ -11,7 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures = "0.3"
 async-trait = "0.1"
 
@@ -30,6 +30,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # HTTP/WebSocket
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tungstenite = "0.24"
+
+# MCP SDK (official)
+rmcp = { version = "0.8", features = ["client", "transport-streamable-http-client-reqwest"] }
 
 # Audio (cross-platform)
 cpal = "0.15"

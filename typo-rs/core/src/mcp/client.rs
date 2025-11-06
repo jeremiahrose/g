@@ -1,38 +1,31 @@
-//! MCP client implementation
+//! MCP client implementation using official rmcp SDK
 
 use super::types::*;
-use crate::config::{get_mcp_config_path, load_mcp_config, McpConfig};
+use crate::config::{get_mcp_config_path, load_mcp_config, McpConfig, McpServerConfig};
 use crate::error::{Error, Result};
+use rmcp::model::{CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, RawContent};
+use rmcp::service::RunningService;
+use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::{RoleClient, ServiceExt};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::RwLock;
+
+type RmcpClient = RunningService<RoleClient, ClientInfo>;
 
 /// MCP client for managing connections to MCP servers
 pub struct McpClient {
-    servers: Arc<RwLock<HashMap<String, ServerConnection>>>,
+    clients: Arc<RwLock<HashMap<String, Arc<RmcpClient>>>>,
     tools: Arc<RwLock<Vec<Tool>>>,
-    next_id: Arc<AtomicU64>,
-}
-
-struct ServerConnection {
-    _child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
-    #[allow(dead_code)]
-    response_rx: mpsc::UnboundedReceiver<JsonRpcResponse>,
 }
 
 impl McpClient {
     /// Create a new MCP client
     pub async fn new() -> Result<Self> {
         Ok(Self {
-            servers: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(RwLock::new(HashMap::new())),
             tools: Arc::new(RwLock::new(Vec::new())),
-            next_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -50,7 +43,7 @@ impl McpClient {
         for (name, server_config) in config.mcp_servers {
             tracing::info!("Connecting to MCP server: {}", name);
 
-            match self.connect_server(&name, &server_config.command, server_config.args.as_deref()).await {
+            match self.connect_server(&name, &server_config).await {
                 Ok(()) => tracing::info!("Successfully connected to MCP server: {}", name),
                 Err(e) => tracing::error!("Failed to connect to MCP server {}: {}", name, e),
             }
@@ -63,104 +56,58 @@ impl McpClient {
     }
 
     /// Connect to a single MCP server
-    async fn connect_server(&self, name: &str, command: &str, args: Option<&[String]>) -> Result<()> {
-        // Spawn the MCP server process
-        let mut cmd = Command::new(command);
-        if let Some(args) = args {
-            cmd.args(args);
-        }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+    async fn connect_server(&self, name: &str, config: &McpServerConfig) -> Result<()> {
+        let client = if let Some(url) = &config.url {
+            // HTTP transport
+            tracing::debug!("Connecting to {} via HTTP: {}", name, url);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::Mcp(format!("Failed to spawn MCP server '{}': {}", name, e))
-        })?;
+            let transport = StreamableHttpClientTransport::from_uri(url.as_str());
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            Error::Mcp("Failed to get stdin handle".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::Mcp("Failed to get stdout handle".to_string())
-        })?;
-
-        // Create channel for responses
-        let (response_tx, response_rx) = mpsc::unbounded_channel();
-
-        // Spawn task to read responses
-        tokio::spawn(async move {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&line) {
-                    if response_tx.send(response).is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-
-        let connection = ServerConnection {
-            _child: child,
-            stdin: Arc::new(Mutex::new(stdin)),
-            response_rx,
-        };
-
-        // Initialize the server
-        self.initialize_server(&connection).await?;
-
-        // Store the connection
-        let mut servers = self.servers.write().await;
-        servers.insert(name.to_string(), connection);
-
-        Ok(())
-    }
-
-    /// Initialize an MCP server connection
-    async fn initialize_server(&self, connection: &ServerConnection) -> Result<()> {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: self.next_id.fetch_add(1, Ordering::SeqCst),
-            method: "initialize".to_string(),
-            params: Some(serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "roots": {
-                        "listChanged": true
-                    }
+            let client_info = ClientInfo {
+                protocol_version: Default::default(),
+                capabilities: ClientCapabilities::default(),
+                client_info: Implementation {
+                    name: "typo-cli".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    title: Some("Typo Voice AI Assistant".to_string()),
+                    website_url: None,
+                    icons: None,
                 },
-                "clientInfo": {
-                    "name": "typo",
-                    "version": "0.1.0"
-                }
-            })),
+            };
+
+            let client = client_info
+                .serve(transport)
+                .await
+                .map_err(|e| Error::Mcp(format!("Failed to connect via HTTP: {}", e)))?;
+
+            tracing::info!("Connected to server");
+
+            Arc::new(client)
+        } else if !config.command.is_empty() {
+            // Subprocess transport
+            return Err(Error::Mcp(
+                "Subprocess transport not yet implemented. Please use HTTP for now.".to_string(),
+            ));
+        } else {
+            return Err(Error::Mcp(
+                "Server config missing both url and command".to_string(),
+            ));
         };
 
-        self.send_request(connection, &request).await?;
+        // Store the client
+        let mut clients = self.clients.write().await;
+        clients.insert(name.to_string(), client);
+
         Ok(())
-    }
-
-    /// Send a JSON-RPC request to a server
-    async fn send_request(&self, connection: &ServerConnection, request: &JsonRpcRequest) -> Result<Value> {
-        let mut stdin = connection.stdin.lock().await;
-        let json = serde_json::to_string(request)?;
-        stdin.write_all(json.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.flush().await?;
-
-        // TODO: Properly wait for and match response by ID
-        // For now, this is simplified
-        Ok(Value::Null)
     }
 
     /// Refresh the list of available tools from all servers
     async fn refresh_tools(&self) -> Result<()> {
-        let servers = self.servers.read().await;
+        let clients = self.clients.read().await;
         let mut all_tools = Vec::new();
 
-        for (server_name, connection) in servers.iter() {
-            match self.list_tools_from_server(connection).await {
+        for (server_name, client) in clients.iter() {
+            match self.list_tools_from_server(server_name, client).await {
                 Ok(tools) => {
                     tracing::info!("Got {} tools from server '{}'", tools.len(), server_name);
                     all_tools.extend(tools);
@@ -178,26 +125,28 @@ impl McpClient {
     }
 
     /// List tools from a specific server
-    async fn list_tools_from_server(&self, connection: &ServerConnection) -> Result<Vec<Tool>> {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: self.next_id.fetch_add(1, Ordering::SeqCst),
-            method: "tools/list".to_string(),
-            params: None,
-        };
+    async fn list_tools_from_server(
+        &self,
+        _server_name: &str,
+        client: &Arc<RmcpClient>,
+    ) -> Result<Vec<Tool>> {
+        let tools_result = client
+            .list_tools(Default::default())
+            .await
+            .map_err(|e| Error::Mcp(format!("Failed to list tools: {}", e)))?;
 
-        // Send request
-        let result = self.send_request(connection, &request).await?;
+        // Convert rmcp tools to our Tool type
+        let tools: Vec<Tool> = tools_result
+            .tools
+            .into_iter()
+            .map(|t| Tool {
+                name: t.name.to_string(),
+                description: t.description.map(|s| s.to_string()),
+                input_schema: Some(serde_json::Value::Object((*t.input_schema).clone())),
+            })
+            .collect();
 
-        // Parse tools from result
-        if let Some(tools_array) = result.get("tools").and_then(|v| v.as_array()) {
-            let tools: Vec<Tool> = tools_array.iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect();
-            Ok(tools)
-        } else {
-            Ok(Vec::new())
-        }
+        Ok(tools)
     }
 
     /// Get list of all available tools
@@ -208,38 +157,42 @@ impl McpClient {
 
     /// Call a tool on the appropriate MCP server
     pub async fn call_tool(&self, tool_name: &str, arguments: &Value) -> Result<ToolCallResult> {
-        let servers = self.servers.read().await;
+        let clients = self.clients.read().await;
 
-        // For simplicity, try each server until one succeeds
-        // In a real implementation, we'd track which server provides which tool
-        for (server_name, connection) in servers.iter() {
-            let request = JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                id: self.next_id.fetch_add(1, Ordering::SeqCst),
-                method: "tools/call".to_string(),
-                params: Some(serde_json::json!({
-                    "name": tool_name,
-                    "arguments": arguments,
-                })),
-            };
+        // Try each server until one succeeds
+        for (server_name, client) in clients.iter() {
+            tracing::debug!("Trying tool '{}' on server '{}'", tool_name, server_name);
 
-            match self.send_request(connection, &request).await {
-                Ok(result) => {
-                    // Parse the result into ToolCallResult
-                    if let Ok(tool_result) = serde_json::from_value::<ToolCallResult>(result.clone()) {
-                        return Ok(tool_result);
-                    }
+            let result = client
+                .call_tool(CallToolRequestParam {
+                    name: tool_name.to_string().into(),
+                    arguments: arguments.as_object().cloned(),
+                })
+                .await;
 
-                    // Fallback: create a success result from raw value
+            match result {
+                Ok(tool_result) => {
+                    // Convert rmcp result to our ToolCallResult
+                    let content = tool_result
+                        .content
+                        .into_iter()
+                        .filter_map(|c| match c.raw {
+                            RawContent::Text(text_content) => {
+                                Some(ContentItem::text(text_content.text))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+
                     return Ok(ToolCallResult {
-                        success: true,
-                        content: Some(vec![ContentItem::text(result.to_string())]),
+                        success: !tool_result.is_error.unwrap_or(false),
+                        content: Some(content),
                         error: None,
-                        is_error: false,
+                        is_error: tool_result.is_error.unwrap_or(false),
                     });
                 }
                 Err(e) => {
-                    tracing::debug!("Server '{}' failed to execute tool: {}", server_name, e);
+                    tracing::debug!("Server '{}' failed: {}", server_name, e);
                     continue;
                 }
             }
@@ -253,15 +206,9 @@ impl McpClient {
 
     /// Close all server connections
     pub async fn close(&self) -> Result<()> {
-        let mut servers = self.servers.write().await;
-        servers.clear();
+        // Clear all clients - they will be dropped and cancelled automatically
+        let mut clients = self.clients.write().await;
+        clients.clear();
         Ok(())
-    }
-}
-
-impl Drop for McpClient {
-    fn drop(&mut self) {
-        // Best effort cleanup
-        // The child processes will be terminated when dropped
     }
 }
