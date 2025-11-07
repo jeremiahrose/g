@@ -1,7 +1,7 @@
 //! Typo CLI - Voice-controlled AI assistant
 
 mod app;
-// mod audio; // TODO: Re-enable when audio is working
+mod audio;
 #[cfg(target_os = "macos")]
 mod keyboard;
 
@@ -21,7 +21,7 @@ struct Args {
     model: String,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(long, default_value = "info")]
+    #[arg(long, default_value = "debug")]
     log_level: String,
 }
 

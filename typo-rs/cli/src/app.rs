@@ -10,6 +10,8 @@ use typo_core::{
     permissions::PermissionManager,
 };
 
+use crate::audio::{AudioPlayer, AudioRecorder};
+
 #[cfg(target_os = "macos")]
 use crate::keyboard::KeyboardListener;
 
@@ -28,10 +30,15 @@ pub struct App {
     mcp_client: Arc<McpClient>,
     permissions: Arc<PermissionManager>,
     pub pending_approval: Arc<RwLock<Option<(String, Value, mpsc::Sender<ApprovalDecision>)>>>,
+    audio_player_tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl App {
-    async fn new(api_key: String, model: String) -> Result<Self> {
+    async fn new(
+        api_key: String,
+        model: String,
+        audio_player_tx: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Result<Self> {
         // Initialize MCP client
         let mcp_client = Arc::new(McpClient::new().await?);
         mcp_client.connect_to_servers().await?;
@@ -52,6 +59,7 @@ impl App {
             mcp_client,
             permissions,
             pending_approval: Arc::new(RwLock::new(None)),
+            audio_player_tx,
         })
     }
 
@@ -96,9 +104,14 @@ impl App {
 
         let config = SessionConfig {
             modalities: vec!["audio".to_string(), "text".to_string()],
-            turn_detection: TurnDetectionConfig {
+            input_audio_format: Some("pcm16".to_string()),
+            output_audio_format: Some("pcm16".to_string()),
+            turn_detection: Some(TurnDetectionConfig {
                 type_: "server_vad".to_string(),
-            },
+                threshold: Some(0.5),
+                prefix_padding_ms: Some(300),
+                silence_duration_ms: Some(200),
+            }),
             tools,
             tool_choice: "auto".to_string(),
             instructions,
@@ -113,25 +126,49 @@ impl App {
     }
 
     async fn handle_events(&self) -> Result<()> {
-        let mut client_guard = self.openai_client.write().await;
-        let client = client_guard.as_mut().context("Client not connected")?;
+        let client_guard = self.openai_client.read().await;
+        let client = client_guard.as_ref().context("Client not connected")?;
 
         while let Some(event) = client.recv().await {
+            tracing::debug!("Received event: {:?}", event);
+
             match event {
                 RealtimeEvent::SessionCreated { session } => {
-                    tracing::debug!("Session created: {}", session.id);
+                    tracing::info!("Session created: {}", session.id);
                 }
                 RealtimeEvent::SessionUpdated { .. } => {
-                    tracing::debug!("Session updated");
+                    tracing::info!("Session updated");
+                }
+                RealtimeEvent::InputAudioBufferCommitted { .. } => {
+                    tracing::debug!("Input audio buffer committed");
+                }
+                RealtimeEvent::InputAudioBufferSpeechStarted { .. } => {
+                    tracing::info!("Speech started");
+                }
+                RealtimeEvent::InputAudioBufferSpeechStopped { .. } => {
+                    tracing::info!("Speech stopped");
+                }
+                RealtimeEvent::ResponseCreated { .. } => {
+                    tracing::info!("Response created");
                 }
                 RealtimeEvent::ResponseAudioDelta { delta, .. } => {
-                    // Decode and play audio
-                    // TODO: Implement audio playback
+                    tracing::debug!("Audio delta received ({} bytes)", delta.len());
+                    // Decode and send audio to player
                     use base64::Engine;
-                    let _ = base64::engine::general_purpose::STANDARD.decode(&delta);
+                    match base64::engine::general_purpose::STANDARD.decode(&delta) {
+                        Ok(audio_bytes) => {
+                            tracing::debug!("Decoded {} audio bytes", audio_bytes.len());
+                            if let Err(e) = self.audio_player_tx.send(audio_bytes) {
+                                tracing::error!("Failed to send audio to player: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to decode audio: {}", e);
+                        }
+                    }
                 }
                 RealtimeEvent::ResponseDone { response } => {
-                    tracing::debug!("Response done: {}", response.status);
+                    tracing::info!("Response done: {}", response.status);
 
                     // Handle function calls
                     for item in response.output {
@@ -147,10 +184,21 @@ impl App {
                         }
                     }
                 }
+                RealtimeEvent::ResponseAudioTranscriptDone { transcript, .. } => {
+                    println!("AI: {}", transcript);
+                }
+                RealtimeEvent::InputAudioTranscriptionCompleted { transcript, .. } => {
+                    println!("You: {}", transcript);
+                }
                 RealtimeEvent::Error { error } => {
                     tracing::error!("OpenAI error: {}", error.message);
+                    if let Some(code) = &error.code {
+                        tracing::error!("Error code: {}", code);
+                    }
                 }
-                _ => {}
+                _ => {
+                    tracing::debug!("Unhandled event: {:?}", event);
+                }
             }
         }
 
@@ -271,10 +319,60 @@ impl App {
 
 /// Run the main application
 pub async fn run(api_key: String, model: String) -> Result<()> {
-    let app = Arc::new(App::new(api_key, model).await?);
+    // Initialize audio (cpal streams must be created on the thread they'll live on)
+    let audio_recorder = AudioRecorder::new()?;
+    let (_audio_player, audio_player_tx) = AudioPlayer::new()?;
+    tracing::info!("Audio initialized");
+
+    // Create app with audio player channel
+    let app = Arc::new(App::new(api_key, model, audio_player_tx).await?);
 
     // Configure session
     app.configure_session().await?;
+
+    // Start audio recording and forward to OpenAI
+    let mut audio_rx = audio_recorder.start_recording().await;
+    let app_clone = Arc::clone(&app);
+    tokio::spawn(async move {
+        tracing::info!("Audio forwarding task started, waiting for chunks...");
+        use base64::Engine;
+        let mut chunk_count = 0;
+        let mut total_bytes = 0;
+        while let Some(audio_bytes) = audio_rx.recv().await {
+            chunk_count += 1;
+            total_bytes += audio_bytes.len();
+
+            if chunk_count == 1 {
+                tracing::info!("Started sending audio to OpenAI (chunk size: {} bytes)", audio_bytes.len());
+            }
+
+            if chunk_count % 50 == 0 {
+                tracing::info!("Received {} audio chunks from recorder ({} bytes total)", chunk_count, total_bytes);
+            }
+
+            // Base64 encode the audio
+            let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&audio_bytes);
+
+            // Send to OpenAI (don't hold any locks during this)
+            let client_guard = app_clone.openai_client.read().await;
+            if let Some(client) = client_guard.as_ref() {
+                match client.append_audio(audio_b64).await {
+                    Ok(_) => {
+                        if chunk_count % 50 == 0 {
+                            tracing::info!("Successfully sent chunk {} to OpenAI", chunk_count);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to send audio to OpenAI: {}", e);
+                    }
+                }
+            } else {
+                tracing::warn!("OpenAI client not available");
+            }
+            drop(client_guard); // Explicitly drop to release lock quickly
+        }
+        tracing::warn!("Audio recording channel closed");
+    });
 
     // Start keyboard listener (macOS only)
     #[cfg(target_os = "macos")]

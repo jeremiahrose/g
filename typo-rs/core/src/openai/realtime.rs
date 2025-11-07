@@ -3,14 +3,14 @@
 use super::types::*;
 use crate::error::{Error, Result};
 use futures::{SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const REALTIME_API_URL: &str = "wss://api.openai.com/v1/realtime";
 
 /// Client for OpenAI Realtime API
 pub struct RealtimeClient {
-    event_rx: mpsc::UnboundedReceiver<RealtimeEvent>,
+    event_rx: Mutex<mpsc::UnboundedReceiver<RealtimeEvent>>,
     message_tx: mpsc::UnboundedSender<RealtimeMessage>,
 }
 
@@ -95,14 +95,14 @@ impl RealtimeClient {
         });
 
         Ok(Self {
-            event_rx,
+            event_rx: Mutex::new(event_rx),
             message_tx,
         })
     }
 
     /// Receive the next event from the API
-    pub async fn recv(&mut self) -> Option<RealtimeEvent> {
-        self.event_rx.recv().await
+    pub async fn recv(&self) -> Option<RealtimeEvent> {
+        self.event_rx.lock().await.recv().await
     }
 
     /// Send a message to the API
@@ -120,12 +120,14 @@ impl RealtimeClient {
 
     /// Append audio to the input buffer
     pub async fn append_audio(&self, audio: String) -> Result<()> {
+        tracing::trace!("Appending {} bytes of audio", audio.len());
         self.send(RealtimeMessage::InputAudioBufferAppend { audio })
             .await
     }
 
     /// Commit the input audio buffer
     pub async fn commit_audio(&self) -> Result<()> {
+        tracing::debug!("Committing audio buffer");
         self.send(RealtimeMessage::InputAudioBufferCommit).await
     }
 

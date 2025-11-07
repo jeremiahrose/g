@@ -38,6 +38,20 @@ pub enum RealtimeEvent {
     #[serde(rename = "input_audio_buffer.speech_stopped")]
     InputAudioBufferSpeechStopped,
 
+    #[serde(rename = "response.audio_transcript.done")]
+    ResponseAudioTranscriptDone {
+        item_id: String,
+        content_index: u32,
+        transcript: String,
+    },
+
+    #[serde(rename = "conversation.item.input_audio_transcription.completed")]
+    InputAudioTranscriptionCompleted {
+        item_id: String,
+        content_index: u32,
+        transcript: String,
+    },
+
     #[serde(rename = "error")]
     Error { error: ErrorInfo },
 
@@ -114,7 +128,12 @@ pub struct ErrorInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionConfig {
     pub modalities: Vec<String>,
-    pub turn_detection: TurnDetectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_audio_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_audio_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_detection: Option<TurnDetectionConfig>,
     pub tools: Vec<Tool>,
     pub tool_choice: String,
     pub instructions: String,
@@ -124,6 +143,12 @@ pub struct SessionConfig {
 pub struct TurnDetectionConfig {
     #[serde(rename = "type")]
     pub type_: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix_padding_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub silence_duration_ms: Option<u32>,
 }
 
 /// Tool definition for OpenAI Realtime API
