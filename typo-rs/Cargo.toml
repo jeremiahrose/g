@@ -37,6 +37,7 @@ rmcp = { version = "0.8", features = ["client", "transport-streamable-http-clien
 # Audio (cross-platform)
 cpal = "0.15"
 hound = "3.5"
+rubato = "0.15"  # High-quality resampling (matches PortAudio quality)
 
 # Configuration
 toml = "0.8"

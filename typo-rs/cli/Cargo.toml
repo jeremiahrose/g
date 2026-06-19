@@ -31,6 +31,7 @@ tracing-subscriber = { workspace = true }
 # Audio
 cpal = { workspace = true }
 hound = { workspace = true }
+rubato = { workspace = true }
 
 # CLI
 clap = { workspace = true }
